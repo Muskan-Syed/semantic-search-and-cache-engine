@@ -2,11 +2,13 @@ import faiss
 import numpy as np
 import pandas as pd
 import zipfile
-import gdown
 from pathlib import Path
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
+
+# Import download helpers
+from app.utils.download_data import download_artifacts, download_processed_dataset
 
 # -----------------------------
 # Project paths
@@ -22,15 +24,6 @@ DOC_EMBEDDINGS_PATH = ARTIFACT_DIR / "document_embeddings.npy"
 CLUSTER_CENTERS_PATH = ARTIFACT_DIR / "cluster_centers.npy"
 
 CLUSTER_ZIP_PATH = ARTIFACT_DIR / "cluster_artifacts.zip"
-
-# -----------------------------
-# Google Drive file IDs
-# -----------------------------
-
-GDRIVE_FILES = {
-    "faiss_index.bin": "1xfekt8E5ZJLN8GyElQFQvbTFx9VmHg8h",
-    "document_embeddings.npy": "17BK0bVAlvw4GNGBzcldQNB9_HnAMnQu4"
-}
 
 # -----------------------------
 # Model configuration
@@ -66,25 +59,7 @@ cache_stats = {
 
 
 # -----------------------------
-# Helper: download artifacts
-# -----------------------------
-
-def download_artifacts():
-
-    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-
-    for filename, file_id in GDRIVE_FILES.items():
-
-        output = ARTIFACT_DIR / filename
-
-        if not output.exists():
-            url = f"https://drive.google.com/uc?id={file_id}"
-            print(f"Downloading {filename}...")
-            gdown.download(url, str(output), quiet=False)
-
-
-# -----------------------------
-# Helper: unzip cluster files
+# Helper: unzip cluster artifacts
 # -----------------------------
 
 def unzip_cluster_artifacts():
@@ -106,8 +81,11 @@ def startup_event():
 
     global df, index, cluster_centers, embedding_model
 
-    # Download artifacts from Drive
+    # Download required artifacts
     download_artifacts()
+
+    # Download processed dataset
+    download_processed_dataset()
 
     # Extract cluster files if zipped
     unzip_cluster_artifacts()
@@ -143,17 +121,17 @@ def query_endpoint(request: QueryRequest):
 
     query = request.query
 
-    # 1. Generate query embedding
+    # Generate query embedding
     q_emb = embedding_model.encode([query], convert_to_numpy=True)[0].astype(np.float32)
 
     q_emb = q_emb / np.linalg.norm(q_emb)
 
-    # 2. Predict cluster
+    # Predict cluster
     similarities = np.dot(cluster_centers, q_emb)
 
     query_cluster = int(np.argmax(similarities))
 
-    # 3. Semantic cache lookup
+    # Semantic cache lookup
     best_match, best_score = None, 0
 
     for cached_q, entry in semantic_cache.items():
@@ -181,7 +159,7 @@ def query_endpoint(request: QueryRequest):
             "dominant_cluster": query_cluster
         }
 
-    # 4. Cache miss → FAISS search
+    # Cache miss → FAISS search
     cache_stats["miss_count"] += 1
 
     distances, indices = index.search(np.array([q_emb]), 1)
@@ -190,7 +168,7 @@ def query_endpoint(request: QueryRequest):
 
     result_text = str(df.iloc[doc_idx]["clean_text"])
 
-    # 5. Store in cache
+    # Store in cache
     semantic_cache[query] = {
         "embedding": q_emb,
         "result": result_text,
