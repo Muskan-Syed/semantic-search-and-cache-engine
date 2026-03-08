@@ -1,0 +1,23 @@
+# -----------------------------
+# Dataset archives
+# -----------------------------
+*.zip
+*.tar.gz
+
+# Extracted dataset folders
+twenty_newsgroups/
+
+# -----------------------------
+# Python runtime files
+# -----------------------------
+__pycache__/
+*.pyc
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# -----------------------------
+# Logs and temporary files
+# -----------------------------
+nohup.out
+*.log
