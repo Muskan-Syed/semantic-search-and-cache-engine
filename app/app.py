@@ -1,7 +1,6 @@
 import faiss
 import numpy as np
 import pandas as pd
-import zipfile
 from pathlib import Path
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
@@ -23,8 +22,6 @@ FAISS_INDEX_PATH = ARTIFACT_DIR / "faiss_index.bin"
 DOC_EMBEDDINGS_PATH = ARTIFACT_DIR / "document_embeddings.npy"
 CLUSTER_CENTERS_PATH = ARTIFACT_DIR / "cluster_centers.npy"
 
-CLUSTER_ZIP_PATH = ARTIFACT_DIR / "cluster_artifacts.zip"
-
 # -----------------------------
 # Model configuration
 # -----------------------------
@@ -34,14 +31,12 @@ SIMILARITY_THRESHOLD = 0.85
 
 app = FastAPI(title="Trademarkia Semantic Cache API")
 
-
 # -----------------------------
 # Request schema
 # -----------------------------
 
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1)
-
 
 # -----------------------------
 # Global state
@@ -56,21 +51,6 @@ cache_stats = {
     "hit_count": 0,
     "miss_count": 0
 }
-
-
-# -----------------------------
-# Helper: unzip cluster artifacts
-# -----------------------------
-
-def unzip_cluster_artifacts():
-
-    if CLUSTER_ZIP_PATH.exists():
-
-        print("Extracting cluster artifacts...")
-
-        with zipfile.ZipFile(CLUSTER_ZIP_PATH, 'r') as zip_ref:
-            zip_ref.extractall(ARTIFACT_DIR)
-
 
 # -----------------------------
 # Startup event
@@ -87,9 +67,6 @@ def startup_event():
     # Download processed dataset
     download_processed_dataset()
 
-    # Extract cluster files if zipped
-    unzip_cluster_artifacts()
-
     # Load dataset
     df = pd.read_csv(DOCUMENTS_PATH)
 
@@ -102,7 +79,6 @@ def startup_event():
     # Load embedding model
     embedding_model = SentenceTransformer(MODEL_NAME)
 
-
 # -----------------------------
 # Root endpoint
 # -----------------------------
@@ -110,7 +86,6 @@ def startup_event():
 @app.get("/")
 def home():
     return {"message": "Trademarkia semantic search API running"}
-
 
 # -----------------------------
 # Query endpoint
@@ -186,7 +161,6 @@ def query_endpoint(request: QueryRequest):
         "dominant_cluster": query_cluster
     }
 
-
 # -----------------------------
 # Cache stats endpoint
 # -----------------------------
@@ -204,7 +178,6 @@ def get_stats():
         "miss_count": cache_stats["miss_count"],
         "hit_rate": round(hit_rate, 3)
     }
-
 
 # -----------------------------
 # Clear cache endpoint
