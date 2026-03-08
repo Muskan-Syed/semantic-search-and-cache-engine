@@ -4,7 +4,5 @@ numpy
 pandas
 faiss-cpu
 sentence-transformers
+scikit-fuzzy
 pydantic
-gdown
-scikit-learn
-torch --index-url https://download.pytorch.org/whl/cpu
