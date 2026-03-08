@@ -461,6 +461,7 @@ docker run -p 8000:8000 trademarkia-api
 # Author
 
 **Syed Muskan**  
+23BCE7305
 B.Tech Computer Science (AI & ML)  
 Pre-Final Year Student  
 VIT-AP University
