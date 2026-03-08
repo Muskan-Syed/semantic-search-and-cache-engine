@@ -1,63 +1,177 @@
-
 import faiss
 import numpy as np
 import pandas as pd
+import zipfile
+import gdown
 from pathlib import Path
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
-PROJECT_DIR = Path("/content/drive/MyDrive/trademarkia-semantic-search")
+# -----------------------------
+# Project paths
+# -----------------------------
+
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+
 DOCUMENTS_PATH = PROJECT_DIR / "data/processed/documents_with_clusters.csv"
-FAISS_INDEX_PATH = PROJECT_DIR / "data/artifacts/faiss_index.bin"
-CLUSTER_CENTERS_PATH = PROJECT_DIR / "data/artifacts/cluster_centers.npy"
+
+ARTIFACT_DIR = PROJECT_DIR / "data/artifacts"
+FAISS_INDEX_PATH = ARTIFACT_DIR / "faiss_index.bin"
+DOC_EMBEDDINGS_PATH = ARTIFACT_DIR / "document_embeddings.npy"
+CLUSTER_CENTERS_PATH = ARTIFACT_DIR / "cluster_centers.npy"
+
+CLUSTER_ZIP_PATH = ARTIFACT_DIR / "cluster_artifacts.zip"
+
+# -----------------------------
+# Google Drive file IDs
+# -----------------------------
+
+GDRIVE_FILES = {
+    "faiss_index.bin": "1xfekt8E5ZJLN8GyElQFQvbTFx9VmHg8h",
+    "document_embeddings.npy": "17BK0bVAlvw4GNGBzcldQNB9_HnAMnQu4"
+}
+
+# -----------------------------
+# Model configuration
+# -----------------------------
 
 MODEL_NAME = "all-MiniLM-L6-v2"
 SIMILARITY_THRESHOLD = 0.85
 
 app = FastAPI(title="Trademarkia Semantic Cache API")
 
+
+# -----------------------------
+# Request schema
+# -----------------------------
+
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1)
 
-# Global state for loaded models and data
+
+# -----------------------------
+# Global state
+# -----------------------------
+
 df, index, cluster_centers, embedding_model = None, None, None, None
+
 semantic_cache = {}
-cache_stats = {"total_entries": 0, "hit_count": 0, "miss_count": 0}
+
+cache_stats = {
+    "total_entries": 0,
+    "hit_count": 0,
+    "miss_count": 0
+}
+
+
+# -----------------------------
+# Helper: download artifacts
+# -----------------------------
+
+def download_artifacts():
+
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+
+    for filename, file_id in GDRIVE_FILES.items():
+
+        output = ARTIFACT_DIR / filename
+
+        if not output.exists():
+            url = f"https://drive.google.com/uc?id={file_id}"
+            print(f"Downloading {filename}...")
+            gdown.download(url, str(output), quiet=False)
+
+
+# -----------------------------
+# Helper: unzip cluster files
+# -----------------------------
+
+def unzip_cluster_artifacts():
+
+    if CLUSTER_ZIP_PATH.exists():
+
+        print("Extracting cluster artifacts...")
+
+        with zipfile.ZipFile(CLUSTER_ZIP_PATH, 'r') as zip_ref:
+            zip_ref.extractall(ARTIFACT_DIR)
+
+
+# -----------------------------
+# Startup event
+# -----------------------------
 
 @app.on_event("startup")
 def startup_event():
+
     global df, index, cluster_centers, embedding_model
+
+    # Download artifacts from Drive
+    download_artifacts()
+
+    # Extract cluster files if zipped
+    unzip_cluster_artifacts()
+
+    # Load dataset
     df = pd.read_csv(DOCUMENTS_PATH)
+
+    # Load FAISS index
     index = faiss.read_index(str(FAISS_INDEX_PATH))
+
+    # Load cluster centers
     cluster_centers = np.load(CLUSTER_CENTERS_PATH).astype(np.float32)
+
+    # Load embedding model
     embedding_model = SentenceTransformer(MODEL_NAME)
 
+
+# -----------------------------
+# Root endpoint
+# -----------------------------
+
 @app.get("/")
-def home(): return {"message": "Trademarkia semantic search API running"}
+def home():
+    return {"message": "Trademarkia semantic search API running"}
+
+
+# -----------------------------
+# Query endpoint
+# -----------------------------
 
 @app.post("/query")
 def query_endpoint(request: QueryRequest):
+
     query = request.query
-    
-    # 1. Generate and normalize query embedding
+
+    # 1. Generate query embedding
     q_emb = embedding_model.encode([query], convert_to_numpy=True)[0].astype(np.float32)
+
     q_emb = q_emb / np.linalg.norm(q_emb)
-    
+
     # 2. Predict cluster
     similarities = np.dot(cluster_centers, q_emb)
+
     query_cluster = int(np.argmax(similarities))
-    
-    # 3. Check Semantic Cache
+
+    # 3. Semantic cache lookup
     best_match, best_score = None, 0
+
     for cached_q, entry in semantic_cache.items():
+
         if entry["cluster"] == query_cluster:
+
             score = np.dot(q_emb, entry["embedding"])
+
             if score > best_score:
-                best_score, best_match = score, cached_q
-    
+
+                best_score = score
+                best_match = cached_q
+
+    # Cache hit
     if best_match and best_score >= SIMILARITY_THRESHOLD:
+
         cache_stats["hit_count"] += 1
+
         return {
             "query": query,
             "cache_hit": True,
@@ -66,21 +180,25 @@ def query_endpoint(request: QueryRequest):
             "result": semantic_cache[best_match]["result"],
             "dominant_cluster": query_cluster
         }
-    
-    # 4. Cache Miss: FAISS Search
+
+    # 4. Cache miss → FAISS search
     cache_stats["miss_count"] += 1
+
     distances, indices = index.search(np.array([q_emb]), 1)
+
     doc_idx = int(indices[0][0])
+
     result_text = str(df.iloc[doc_idx]["clean_text"])
-    
-    # 5. Store in Cache
+
+    # 5. Store in cache
     semantic_cache[query] = {
         "embedding": q_emb,
         "result": result_text,
         "cluster": query_cluster
     }
+
     cache_stats["total_entries"] = len(semantic_cache)
-    
+
     return {
         "query": query,
         "cache_hit": False,
@@ -90,10 +208,18 @@ def query_endpoint(request: QueryRequest):
         "dominant_cluster": query_cluster
     }
 
+
+# -----------------------------
+# Cache stats endpoint
+# -----------------------------
+
 @app.get("/cache/stats")
 def get_stats():
+
     total = cache_stats["hit_count"] + cache_stats["miss_count"]
+
     hit_rate = cache_stats["hit_count"] / total if total > 0 else 0
+
     return {
         "total_entries": cache_stats["total_entries"],
         "hit_count": cache_stats["hit_count"],
@@ -101,10 +227,18 @@ def get_stats():
         "hit_rate": round(hit_rate, 3)
     }
 
+
+# -----------------------------
+# Clear cache endpoint
+# -----------------------------
+
 @app.delete("/cache")
 def clear_cache_endpoint():
+
     semantic_cache.clear()
+
     cache_stats["total_entries"] = 0
     cache_stats["hit_count"] = 0
     cache_stats["miss_count"] = 0
+
     return {"message": "Semantic cache cleared successfully"}
