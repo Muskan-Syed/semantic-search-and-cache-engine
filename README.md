@@ -1,4 +1,4 @@
-# Trademarkia Semantic Search with Cluster-Aware Semantic Cache
+# Semantic Search with Cluster-Aware Semantic Cache
 
 ## Project Overview
 
